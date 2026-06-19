@@ -47,3 +47,6 @@ realgoodsplits = "realgoodsplits.gui:main"
 
 [tool.setuptools.packages.find]
 include = ["realgoodsplits*"]
+
+[tool.setuptools.package-data]
+realgoodsplits = ["assets/*.png", "assets/*.ico"]

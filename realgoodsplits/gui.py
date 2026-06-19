@@ -54,6 +54,7 @@ class App(_Root):
         self.title(f"RealGoodSplits {__version__}")
         self.geometry("860x680")
         self.minsize(760, 600)
+        self._set_icon()
 
         self.files: list[Path] = []
         self.stem_vars: dict[str, ctk.BooleanVar] = {}
@@ -68,6 +69,25 @@ class App(_Root):
         self._build_footer()
         self._refresh_stem_checkboxes()
         self._poll_queue()
+
+    def _set_icon(self) -> None:
+        """Set the window/taskbar icon; never fatal if assets are missing."""
+        assets = Path(__file__).resolve().parent / "assets"
+        try:
+            import tkinter as tk
+
+            png = assets / "icon.png"
+            if png.exists():
+                self._icon_img = tk.PhotoImage(file=str(png))  # keep a reference
+                self.iconphoto(True, self._icon_img)
+        except Exception:
+            pass
+        try:
+            ico = assets / "icon.ico"  # Windows title bar / taskbar
+            if ico.exists():
+                self.iconbitmap(default=str(ico))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ UI
     def _build_header(self) -> None:

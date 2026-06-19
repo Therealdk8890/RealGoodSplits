@@ -35,6 +35,12 @@ try:
 except Exception:
     pass
 
+# Bundle the app icon / assets so the window icon works when frozen.
+datas += [
+    ("realgoodsplits/assets/icon.png", "realgoodsplits/assets"),
+    ("realgoodsplits/assets/icon.ico", "realgoodsplits/assets"),
+]
+
 
 a = Analysis(
     ["run_gui.py"],
@@ -58,7 +64,7 @@ exe = EXE(
     name="RealGoodSplits",
     console=False,
     disable_windowed_traceback=False,
-    icon=None,
+    icon="realgoodsplits/assets/icon.ico",
 )
 
 coll = COLLECT(
