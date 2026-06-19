@@ -1,0 +1,48 @@
+name: Build Windows app
+
+# Builds a standalone Windows app with PyInstaller.
+# Run it manually from the Actions tab, or push a version tag (e.g. v1.0.0)
+# to also publish a GitHub Release with the zipped app attached.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies (CPU PyTorch)
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+          pip install -e .
+          pip install "pyinstaller>=6.6"
+
+      - name: Build with PyInstaller
+        run: pyinstaller --noconfirm --clean realgoodsplits.spec
+
+      - name: Zip the app
+        run: Compress-Archive -Path dist/RealGoodSplits/* -DestinationPath RealGoodSplits-windows.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RealGoodSplits-windows
+          path: RealGoodSplits-windows.zip
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: gh release create "${{ github.ref_name }}" RealGoodSplits-windows.zip --generate-notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

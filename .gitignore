@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# PyInstaller
+*.spec.bak
+
+# Models cache (Demucs downloads weights here on first run)
+*.th
+
+# Separation output / scratch audio
+/separated/
+/out/
+*.wav.tmp
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

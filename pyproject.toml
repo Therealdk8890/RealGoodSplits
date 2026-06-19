@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "realgoodsplits"
+version = "1.0.0"
+description = "A high-quality AI stem splitter for Windows (and macOS/Linux), powered by Demucs."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Therealdk8890" }]
+keywords = ["audio", "stem", "separation", "demucs", "vocals", "karaoke", "music", "spleeter"]
+classifiers = [
+    "Environment :: X11 Applications",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+]
+dependencies = [
+    "demucs>=4.0.1",
+    "torch>=2.1",
+    "torchaudio>=2.1",
+    "customtkinter>=5.2.2",
+    "soundfile>=0.12.1",
+    "lameenc>=1.7.0",
+]
+
+[project.optional-dependencies]
+dnd = ["tkinterdnd2>=0.4.2"]
+build = ["pyinstaller>=6.6"]
+
+[project.urls]
+Homepage = "https://github.com/Therealdk8890/RealGoodSplits"
+Issues = "https://github.com/Therealdk8890/RealGoodSplits/issues"
+
+[project.scripts]
+realgoodsplits-cli = "realgoodsplits.cli:main"
+
+[project.gui-scripts]
+realgoodsplits = "realgoodsplits.gui:main"
+
+[tool.setuptools.packages.find]
+include = ["realgoodsplits*"]
