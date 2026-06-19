@@ -105,16 +105,6 @@ def main(argv: list[str] | None = None) -> int:
     started = time.time()
     for idx, audio in enumerate(files, 1):
         print(f"[{idx}/{len(files)}] {audio.name}")
-
-        last = {"pct": -5}
-
-        def progress(frac: float, _msg: str) -> None:
-            pct = int(frac * 100)
-            if pct >= last["pct"] + 5:  # throttle to every ~5%
-                last["pct"] = pct
-                bar = "#" * (pct // 5) + "-" * (20 - pct // 5)
-                print(f"\r    [{bar}] {pct:3d}%", end="", flush=True)
-
         try:
             written = separator.separate_file(
                 audio,
@@ -125,14 +115,13 @@ def main(argv: list[str] | None = None) -> int:
                 mp3_bitrate=args.mp3_bitrate,
                 bit_depth=args.bit_depth,
                 float32=args.float32,
-                progress_cb=progress,
+                progress=True,  # Demucs prints its own progress bar
             )
-            print(f"\r    [####################] 100%")
             for w in written:
                 print(f"      -> {w}")
         except Exception as exc:  # keep going through a batch
             failures += 1
-            print(f"\r    ! failed: {exc}", file=sys.stderr)
+            print(f"    ! failed: {exc}", file=sys.stderr)
 
     elapsed = time.time() - started
     ok = len(files) - failures

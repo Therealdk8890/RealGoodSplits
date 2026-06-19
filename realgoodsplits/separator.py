@@ -1,8 +1,12 @@
 """Core stem-separation engine.
 
-This module wraps `demucs` behind a small, well-typed API that both the GUI and
-the CLI use. Heavy imports (``torch`` / ``demucs``) happen lazily inside methods
-so that importing this module — and launching the GUI — stays instant.
+This wraps Demucs behind a small, well-typed API used by both the GUI and the
+CLI. It uses Demucs' stable low-level building blocks (``pretrained.get_model``
++ ``apply.apply_model`` + ``audio.save_audio``) — the same path ``python -m
+demucs`` takes internally — so results match the reference implementation.
+
+Heavy imports (``torch`` / ``demucs``) happen lazily inside methods so that
+importing this module — and launching the GUI — stays instant.
 """
 
 from __future__ import annotations
@@ -39,8 +43,6 @@ AUDIO_EXTS = {
     ".opus", ".wma", ".aif", ".aiff", ".alac",
 }
 
-# A progress callback receives a fraction in [0, 1] and a short status message.
-ProgressCB = Callable[[float, str], None]
 # A log callback receives a single line of human-readable text.
 LogCB = Callable[[str], None]
 
@@ -106,64 +108,97 @@ class StemSeparator:
         self.shifts = shifts
         self.segment = segment
         self.jobs = jobs
-        self._sep = None  # demucs.api.Separator, created lazily
-        self._loaded_key = None
-        self._current_cb: Optional[ProgressCB] = None
+        self._model = None  # demucs model (BagOfModels), loaded lazily
+        self._loaded_name: Optional[str] = None
 
     # -- model lifecycle ----------------------------------------------------
 
-    def _config_key(self):
-        return (
-            self.model_name, self.device, self.overlap,
-            self.shifts, self.segment, self.jobs,
-        )
+    def _ensure_loaded(self):
+        if self._model is not None and self._loaded_name == self.model_name:
+            return self._model
+        from demucs.pretrained import get_model  # heavy import, kept local
 
-    def _ensure_loaded(self) -> None:
-        key = self._config_key()
-        if self._sep is not None and self._loaded_key == key:
-            return
-        from demucs.api import Separator  # heavy import, kept local
-
-        kwargs = dict(
-            model=self.model_name,
-            device=self.device,
-            overlap=self.overlap,
-            shifts=self.shifts,
-            jobs=self.jobs,
-            progress=False,
-            callback=self._demucs_callback,
-        )
-        if self.segment:
-            kwargs["segment"] = self.segment
-        self._sep = Separator(**kwargs)
-        self._loaded_key = key
+        self._model = get_model(self.model_name)
+        self._loaded_name = self.model_name
+        return self._model
 
     @property
     def samplerate(self) -> int:
-        self._ensure_loaded()
-        return int(self._sep.samplerate)
+        return int(self._ensure_loaded().samplerate)
+
+    @property
+    def sources(self) -> List[str]:
+        return list(self._ensure_loaded().sources)
 
     def preload(self) -> None:
         """Eagerly download/load the model (e.g. to warm a cache)."""
         self._ensure_loaded()
 
-    # -- progress bridge ----------------------------------------------------
+    # -- audio loading ------------------------------------------------------
 
-    def _demucs_callback(self, data: dict) -> None:
-        """Translate Demucs' internal callback dict into a 0..1 fraction."""
-        cb = self._current_cb
-        if cb is None:
-            return
+    @staticmethod
+    def _load_track(path: Path, samplerate: int, channels: int):
+        """Read an audio file to a ``[channels, time]`` tensor at ``samplerate``.
+
+        Tries, in order: Demucs' ffmpeg-backed reader (handles mp3/m4a/…),
+        torchaudio, then soundfile. The soundfile fallback covers WAV/FLAC/OGG
+        without any ffmpeg/torchcodec dependency, which keeps things working on
+        a bare Windows install.
+        """
+        import torch
+        from demucs.audio import AudioFile, convert_audio
+
+        # 1) ffmpeg-backed — the broadest format support.
         try:
-            models = max(1, int(data.get("models", 1)))
-            model_idx = int(data.get("model_idx_in_bag", 0))
-            length = max(1, int(data.get("audio_length", 1)))
-            offset = int(data.get("segment_offset", 0))
-            frac = (model_idx + offset / length) / models
-            cb(min(max(frac, 0.0), 1.0), "Separating…")
+            return AudioFile(str(path)).read(
+                streams=0, samplerate=samplerate, channels=channels
+            )
         except Exception:
-            # Progress is best-effort; never let it break a separation.
             pass
+
+        # 2) torchaudio.
+        try:
+            import torchaudio
+
+            wav, sr = torchaudio.load(str(path))
+            return convert_audio(wav, sr, samplerate, channels)
+        except Exception:
+            pass
+
+        # 3) soundfile (libsndfile) — no ffmpeg/torchcodec required.
+        import soundfile as sf
+
+        data, sr = sf.read(str(path), dtype="float32", always_2d=True)  # [frames, ch]
+        wav = torch.from_numpy(data.T).contiguous()  # -> [ch, frames]
+        return convert_audio(wav, sr, samplerate, channels)
+
+    @staticmethod
+    def _save(source, out_path: Path, *, ext: str, samplerate: int,
+              mp3_bitrate: int, bit_depth: int, float32: bool) -> None:
+        """Write one stem. WAV/FLAC go through soundfile; MP3 through lameenc.
+
+        This deliberately avoids torchaudio's writer, which in recent versions
+        delegates to TorchCodec/FFmpeg and is therefore not always available.
+        """
+        if ext == "mp3":
+            # Demucs' MP3 encoder uses lameenc and is independent of torchaudio.
+            from demucs.audio import save_audio
+
+            save_audio(source, str(out_path), samplerate=samplerate, bitrate=mp3_bitrate)
+            return
+
+        import numpy as np
+        import soundfile as sf
+
+        data = source.detach().transpose(0, 1).contiguous().cpu().numpy().astype("float32")
+        peak = float(np.max(np.abs(data))) if data.size else 0.0
+        if peak > 1.0:  # rescale rather than hard-clip, matching Demucs' default
+            data = data / peak
+        if float32:
+            subtype = "FLOAT"
+        else:
+            subtype = "PCM_24" if bit_depth == 24 else "PCM_16"
+        sf.write(str(out_path), data, samplerate, subtype=subtype)
 
     # -- the main event -----------------------------------------------------
 
@@ -179,7 +214,7 @@ class StemSeparator:
         bit_depth: int = 16,
         float32: bool = False,
         filename_template: str = "{track}/{stem}.{ext}",
-        progress_cb: Optional[ProgressCB] = None,
+        progress: bool = False,
         log_cb: Optional[LogCB] = None,
     ) -> List[Path]:
         """Separate a single audio file and write the requested stems to disk.
@@ -192,25 +227,47 @@ class StemSeparator:
             bit_depth: 16 or 24 (WAV/FLAC only).
             float32: Write 32-bit float WAV/FLAC (overrides ``bit_depth``).
             filename_template: Uses ``{track}``, ``{stem}`` and ``{ext}``.
+            progress: Show Demucs' built-in tqdm progress bar (handy for the CLI).
 
         Returns:
             The list of paths that were written.
         """
-        from demucs.api import save_audio  # local heavy import
+        import torch
+        from demucs.apply import apply_model
 
         input_path = Path(input_path)
         output_dir = Path(output_dir)
-        self._ensure_loaded()
+        model = self._ensure_loaded()
 
         if log_cb:
             log_cb(f"Loading: {input_path.name}")
 
-        self._current_cb = progress_cb
-        try:
-            _origin, separated = self._sep.separate_audio_file(str(input_path))
-        finally:
-            self._current_cb = None
+        wav = self._load_track(input_path, model.samplerate, model.audio_channels)
 
+        # Standard Demucs normalisation: zero-mean / unit-std before the model,
+        # reversed afterwards so output levels match the input.
+        ref = wav.mean(0)
+        mean = ref.mean()
+        std = ref.std()
+        if float(std) < 1e-8:
+            std = torch.tensor(1.0)
+        wav = (wav - mean) / std
+
+        with torch.no_grad():
+            estimates = apply_model(
+                model,
+                wav[None],
+                shifts=self.shifts,
+                split=True,
+                overlap=self.overlap,
+                progress=progress,
+                device=self.device,
+                num_workers=self.jobs,
+                segment=self.segment,
+            )[0]
+        estimates = estimates * std + mean
+
+        separated = {name: estimates[i] for i, name in enumerate(model.sources)}
         out_map = self._select_outputs(separated, stems=stems, two_stems=two_stems)
 
         written: List[Path] = []
@@ -221,16 +278,10 @@ class StemSeparator:
             out_path = output_dir / rel
             out_path.parent.mkdir(parents=True, exist_ok=True)
 
-            save_kwargs = dict(samplerate=self.samplerate)
-            if ext == "mp3":
-                save_kwargs["bitrate"] = mp3_bitrate
-            else:  # wav / flac
-                if float32:
-                    save_kwargs["as_float"] = True
-                else:
-                    save_kwargs["bits_per_sample"] = bit_depth
-
-            save_audio(source, str(out_path), **save_kwargs)
+            self._save(
+                source, out_path, ext=ext, samplerate=model.samplerate,
+                mp3_bitrate=mp3_bitrate, bit_depth=bit_depth, float32=float32,
+            )
             written.append(out_path)
             if log_cb:
                 log_cb(f"  ✓ {rel}")

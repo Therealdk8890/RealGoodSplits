@@ -360,21 +360,16 @@ class App(_Root):
             separator = StemSeparator(model_name=cfg["model"], device=cfg["device"])
             total = len(cfg["files"])
             for i, audio in enumerate(cfg["files"]):
-                self._queue.put(("status", f"[{i+1}/{total}] {audio.name}"))
-
-                def progress(frac, _msg, _i=i, _t=total):
-                    self._queue.put(("progress", (_i + frac) / _t))
-
+                self._queue.put(("file_start", (i, total, audio.name)))
                 out_dir = (audio.parent if cfg["same_as_input"]
                            else Path(cfg["output"]))
-                written = separator.separate_file(
+                separator.separate_file(
                     audio, out_dir,
                     stems=cfg["stems"], two_stems=cfg["two_stems"],
                     output_format=cfg["fmt"], mp3_bitrate=cfg["bitrate"],
-                    progress_cb=progress,
                     log_cb=lambda line: self._queue.put(("log", line)),
                 )
-                self._queue.put(("progress", (i + 1) / total))
+                self._queue.put(("file_done", (i + 1) / total))
             self._queue.put(("done", None))
         except Exception as exc:  # surfaced to the user on the main thread
             self._queue.put(("error", str(exc)))
@@ -383,11 +378,16 @@ class App(_Root):
         try:
             while True:
                 kind, payload = self._queue.get_nowait()
-                if kind == "progress":
+                if kind == "file_start":
+                    i, total, name = payload
+                    self.status.configure(text=f"[{i+1}/{total}] Separating {name}…")
+                    self._log(f"[{i+1}/{total}] {name}")
+                    self.progress.configure(mode="indeterminate")
+                    self.progress.start()  # animate while the model works
+                elif kind == "file_done":
+                    self.progress.stop()
+                    self.progress.configure(mode="determinate")
                     self.progress.set(payload)
-                elif kind == "status":
-                    self.status.configure(text=payload)
-                    self._log(payload)
                 elif kind == "log":
                     self._log(payload)
                 elif kind == "done":
@@ -400,6 +400,11 @@ class App(_Root):
         self.after(100, self._poll_queue)
 
     def _finish(self, status: str) -> None:
+        try:
+            self.progress.stop()
+        except Exception:
+            pass
+        self.progress.configure(mode="determinate")
         self.progress.set(1 if status.startswith("Done") else 0)
         self.status.configure(text=status)
         self.run_btn.configure(state="normal", text="Split Stems")
